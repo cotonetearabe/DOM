@@ -15,113 +15,114 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with DOM.  If not, see <http://www.gnu.org/licenses/>.
-"""
 
+17/11/2020(dd/mm/yyyy) - cotonetearabe <cotonete.arabe@gmail.com>
+-Edited code to work with python 3 (has_key is deprecated)
+"""
 import argparse
 import logging
-import os
+# import os
 import time
-import simplejson as json
+# import simplejson as json  # Maybe use the built in module json
+import json  # Test the speed of the built in json vs simplejson
 import re
 from subprocess import call
-
-IPSET = 'ipset'
-NFT = 'nft'
-
+from shutil import which
 have_daemon = True
 try:
-    import daemon
-except:
-    logging.warning("No daemon support available, install python-daemon if feature is needed")
-    have_daemon = False
+	import daemon
+except ModuleNotFoundError:
+	logging.warning("No daemon support available, install python-daemon if feature is needed")
+	have_daemon = False
 
-ips_list = []
-
-parser = argparse.ArgumentParser(description='Deny On Monitoring')
-parser.add_argument('-f', '--file', default='/var/log/suricata/eve.json', help='JSON file to monitor')
-parser.add_argument('-s', '--ipset', default='Sofitel', help='Set IPSET for blacklist')
-parser.add_argument('-n', '--nftables', default=None, help='Table where set used as blacklist is')
-parser.add_argument('-v', '--verbose', default=False, action="count", help="Show verbose output, use multiple times increase verbosity")
-parser.add_argument('-l', '--log', default=None, help='File to log output to (default to stdout)')
-parser.add_argument('-m', '--motif', default='libssh', help='String to look for in event')
-parser.add_argument('-i', '--invert', default=False, action='store_true', help="Invert match: trigger action if not found")
-if have_daemon:
-    parser.add_argument('-D', '--daemon', default=False, action="store_true", help="Run as unix daemon")
-
-args = parser.parse_args()
-
-if args.verbose >= 3:
-    loglevel=logging.DEBUG
-elif args.verbose >= 2:
-    loglevel=logging.INFO
-elif args.verbose >= 1:
-    loglevel=logging.WARNING
-else:
-    loglevel=logging.ERROR
-
-def setup_logging(args):
-    if args.log:
-        logging.basicConfig(filename=args.log,
-                            format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
-                            level=loglevel)
-    else:
-        logging.basicConfig(level=loglevel)
-
-def call_nft(args, src_ip, value = None):
-    if not src_ip in ips_list:
-        # TODO add test like in ipset
-        ret = call([NFT, 'add', 'element', args.nftables, args.ipset, '{', src_ip, '}'])
-        ips_list.append(src_ip)
-        if ret == 0:
-            logging.info("Added %s which use %s" % (src_ip, value))
-
-def call_ipset(args, src_ip, value = None):
-    if not src_ip in ips_list:
-        ret = call([IPSET, 'test', args.ipset, src_ip, '-q'])
-        if not ret:
-            ips_list.append(src_ip)
-            return
-        ret = call([IPSET, 'add', args.ipset, src_ip])
-        ips_list.append(src_ip)
-        if ret == 0:
-            logging.info("Added %s which use %s" % (src_ip, value))
-
-def main_task(args):
-    setup_logging(args)
-    file = open(args.file, 'r')
-    if args.nftables:
-        call_add = call_nft
-    else:
-        call_add = call_ipset
-    versionre = re.compile(args.motif)
-    while 1:
-        where = file.tell()
-        line = file.readline()
-        if not line:
-            # Dodo
-            time.sleep(0.3)
-            file.seek(where)
-        else:
-            try:
-                event = json.loads(line)
-            except json.decoder.JSONDecodeError:
-                time.sleep(0.3)
-                continue
-            if event.has_key('event_type') and event['event_type'] == 'ssh':
-                if versionre.match(event['ssh']['client']['software_version']):
-                    if not args.invert:
-                        # Vas-y Francis, c'est bon bon bon
-                        call_add(args, event['src_ip'],
-                                   value = event['ssh']['client']['software_version'])
-                else:
-                    if args.invert:
-                        call_add(args, event['src_ip'],
-                                   value = event['ssh']['client']['software_version'])
+IPSET = which('ipset')
+NFT = which('nft')
+if IPSET is None or NFT is None:
+	print("Ipset or nftables are not installed please check and try again...")
 
 
+def call_nft(args, src_ip, value=None):
+	if src_ip not in ips_list:
+		# TODO add test like in ipset
+		ret = call([NFT, 'add', 'element', args.nftables, args.ipset, '{', src_ip, '}'])
+		ips_list.append(src_ip)
+		if ret == 0:
+			logging.info("Added %s which use %s" % (src_ip, value))
 
-if have_daemon and args.daemon:
-    with daemon.DaemonContext():
-        main_task(args)
-else:
-    main_task(args)
+
+def call_ipset(args, src_ip, value=None):
+	if src_ip not in ips_list:
+		ret = call([IPSET, 'test', args.ipset, src_ip, '-q'])
+		if not ret:
+			ips_list.append(src_ip)
+			return
+		ret = call([IPSET, 'add', args.ipset, src_ip])
+		ips_list.append(src_ip)
+		if ret == 0:
+			logging.info("Added %s which use %s" % (src_ip, value))
+
+
+def main(args):
+	global ips_list
+	ips_list = []
+	if args.verbose >= 3:
+		loglevel = logging.DEBUG
+	elif args.verbose >= 2:
+		loglevel = logging.INFO
+	elif args.verbose >= 1:
+		loglevel = logging.WARNING
+	else:
+		loglevel = logging.ERROR
+	if args.log:
+		logging.basicConfig(filename=args.log, format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s', level=loglevel)
+	else:
+		logging.basicConfig(level=loglevel)
+
+	file = open(args.file, 'r')
+	if args.nftables:
+		call_add = call_nft
+	else:
+		call_add = call_ipset
+	versionre = re.compile(args.motif)
+	while 1:
+		where = file.tell()
+		line = file.readline()
+		if not line:
+			# Dodo
+			time.sleep(0.3)
+			file.seek(where)
+		else:
+			try:
+				event = json.loads(line)
+			except json.decoder.JSONDecodeError:
+				time.sleep(0.3)
+				continue
+			# if event.has_key('event_type') and event['event_type'] == 'ssh':  # has_key(k) is depreated!
+			if 'event_type' in event.values() and event['event_type'] == 'ssh':
+				if versionre.match(event['ssh']['client']['software_version']):
+					if not args.invert:
+						# Vas-y Francis, c'est bon bon bon  # "Go ahead francis, it's good, good, good"
+						call_add(args, event['src_ip'], value=event['ssh']['client']['software_version'])
+				else:
+					if args.invert:
+						call_add(args, event['src_ip'], value=event['ssh']['client']['software_version'])
+
+
+if __name__ == '__main__':
+	parser = argparse.ArgumentParser(description='Deny On Monitoring')
+	parser.add_argument('-f', '--file', default='/var/log/suricata/eve.json', help='JSON file to monitor')
+	parser.add_argument('-s', '--ipset', default='Sofitel', help='Set IPSET for blacklist')
+	parser.add_argument('-n', '--nftables', default=None, help='Table where set used as blacklist is')
+	parser.add_argument('-v', '--verbose', default=False, action="count", help="Show verbose output, use multiple times increase verbosity")
+	parser.add_argument('-l', '--log', default=None, help='File to log output to (default to stdout)')
+	parser.add_argument('-m', '--motif', default='libssh', help='String to look for in event')
+	parser.add_argument('-i', '--invert', default=False, action='store_true', help="Invert match: trigger action if not found")
+	if have_daemon:
+		parser.add_argument('-D', '--daemon', default=False, action="store_true", help="Run as unix daemon")
+	args = parser.parse_args()
+
+	if have_daemon and args.daemon:
+		with daemon.DaemonContext():
+			main(args)
+	else:
+		main(args)
